@@ -1,4 +1,5 @@
 import express from 'express';
+import express from 'express';
 import bodyParser from 'body-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -18,6 +19,35 @@ const PORT = process.env.PORT || 3000;
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// CORS Middleware - Allow requests from your Hostinger domain
+app.use((req, res, next) => {
+  // Allow requests from your Hostinger domain and localhost
+  const allowedOrigins = [
+    'https://whitesmoke-squirrel-325874.hostingersite.com', // Your current Hostinger domain
+    'https://yourdomain.com', // Add your custom domain when ready
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://localhost:5173'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+  
+  next();
 });
 
 // Middleware
