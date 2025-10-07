@@ -1,5 +1,4 @@
 import express from 'express';
-import express from 'express';
 import bodyParser from 'body-parser';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -211,3 +210,4 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
+
