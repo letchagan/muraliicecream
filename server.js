@@ -24,12 +24,12 @@ const razorpay = new Razorpay({
 
 // Email functionality removed - admin dashboard and billing system removed
 
-// CORS Middleware - Allow requests from your Hostinger domain
+// CORS Middleware - Allow requests from your domains
 app.use((req, res, next) => {
-  // Allow requests from your Hostinger domain and localhost
+  // Allow requests from your domains
   const allowedOrigins = [
     'https://whitesmoke-squirrel-325874.hostingersite.com', // Your current Hostinger domain
-    'https://muraliicecream.org', // Add your custom domain when ready
+    'https://muraliicecream.org', // Your custom domain
     'https://muraliicecream.onrender.com', // Your Render deployment
     'http://localhost:5173',
     'http://localhost:3000',
@@ -37,13 +37,22 @@ app.use((req, res, next) => {
   ];
   
   const origin = req.headers.origin;
-  if (allowedOrigins.includes(origin)) {
+  
+  // For production, allow all origins to avoid CORS issues
+  // In production, you might want to be more restrictive
+  if (process.env.NODE_ENV === 'production') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (!origin) {
+    // If no origin (e.g., direct access), allow it
+    res.setHeader('Access-Control-Allow-Origin', '*');
   }
   
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Max-Age', '86400'); // 24 hours
   
   // Handle preflight requests
   if (req.method === 'OPTIONS') {
