@@ -6,6 +6,8 @@ import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 
+// Email functionality removed - admin dashboard and billing system removed
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -20,12 +22,18 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+// Email functionality removed - admin dashboard and billing system removed
+
 // CORS Middleware - Allow requests from your Hostinger domain
 app.use((req, res, next) => {
   // Allow requests from your Hostinger domain and localhost
   const allowedOrigins = [
     'https://whitesmoke-squirrel-325874.hostingersite.com', // Your current Hostinger domain
-    'muraliicecream.org' // Add your custom domain when ready
+    'https://muraliicecream.org', // Add your custom domain when ready
+    'https://muraliicecream.onrender.com', // Your Render deployment
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://localhost:5173'
   ];
   
   const origin = req.headers.origin;
@@ -204,8 +212,6 @@ app.get('*', (req, res) => {
 });
 
 // Start the server
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
-
-
