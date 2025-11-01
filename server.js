@@ -25,10 +25,7 @@ app.use((req, res, next) => {
   // Allow requests from your Hostinger domain and localhost
   const allowedOrigins = [
     'https://whitesmoke-squirrel-325874.hostingersite.com', // Your current Hostinger domain
-    'https://yourdomain.com', // Add your custom domain when ready
-    'http://localhost:5173',
-    'http://localhost:3000',
-    'https://localhost:5173'
+    'muraliicecream.org' // Add your custom domain when ready
   ];
   
   const origin = req.headers.origin;
@@ -210,4 +207,5 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
+
 
