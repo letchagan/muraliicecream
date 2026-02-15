@@ -34,8 +34,12 @@ const razorpay = new Razorpay({
 app.use((req, res, next) => {
   // Allow requests from your domains
   const allowedOrigins = [
+    'https://whitesmoke-squirrel-325874.hostingersite.com', // Your current Hostinger domain
     'https://muraliicecream.org', // Your custom domain
-    'https://muraliicecream.onrender.com' // Your Render deployment
+    'https://muraliicecream.onrender.com', // Your Render deployment
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://localhost:5173'
   ];
 
   const origin = req.headers.origin;
@@ -213,6 +217,134 @@ app.get('/api/payment/status/:paymentId', async (req, res) => {
       message: 'Error fetching payment status',
       error: error.message
     });
+  }
+});
+
+// Send Contact Form Email
+app.post('/api/send-contact-email', async (req, res) => {
+  console.log('Received contact form submission');
+  try {
+    const { name, email, phone, subject, message } = req.body;
+    console.log('Contact form data:', { name, email, phone, subject, message });
+
+    if (!email || !name || !message) {
+      console.error('Missing required fields in contact form');
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Email to Admin (Notification)
+    const adminEmailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+        <div style="background-color: #ff4d4d; padding: 20px; text-align: center; color: white;">
+          <h1 style="margin: 0;">Murali Icecream</h1>
+          <p style="margin: 5px 0 0;">New Contact Form Submission</p>
+        </div>
+        
+        <div style="padding: 20px;">
+          <div style="background-color: #fff0f0; padding: 10px; margin-bottom: 20px; text-align: center; border: 1px solid red; color: #cc0000; border-radius: 4px;">
+            <strong>🔔 NEW MESSAGE FROM WEBSITE CONTACT FORM</strong>
+          </div>
+
+          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p style="margin: 5px 0;"><strong>Name:</strong> ${name}</p>
+            <p style="margin: 5px 0;"><strong>Email:</strong> ${email}</p>
+            <p style="margin: 5px 0;"><strong>Phone:</strong> ${phone || 'Not provided'}</p>
+            <p style="margin: 5px 0;"><strong>Subject:</strong> ${subject}</p>
+            <p style="margin: 5px 0;"><strong>Date:</strong> ${new Date().toLocaleString()}</p>
+          </div>
+
+          <h3>Message:</h3>
+          <div style="background-color: #ffffff; padding: 15px; border-left: 4px solid #ff4d4d; margin: 10px 0;">
+            <p style="white-space: pre-wrap;">${message}</p>
+          </div>
+
+          <div style="margin-top: 20px; padding: 15px; background-color: #f9f9f9; border-radius: 5px;">
+            <p style="margin: 5px 0; font-size: 14px;"><strong>Reply to customer:</strong></p>
+            <p style="margin: 5px 0; font-size: 14px;">Email: <a href="mailto:${email}">${email}</a></p>
+            ${phone ? `<p style="margin: 5px 0; font-size: 14px;">Phone: <a href="tel:${phone}">${phone}</a></p>` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Email to Customer (Confirmation)
+    const customerEmailHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+        <div style="background-color: #ff4d4d; padding: 20px; text-align: center; color: white;">
+          <h1 style="margin: 0;">Murali Icecream</h1>
+          <p style="margin: 5px 0 0;">Thank You for Contacting Us!</p>
+        </div>
+        
+        <div style="padding: 20px;">
+          <p>Dear ${name},</p>
+          <p>Thank you for reaching out to us! We have received your message and our team will get back to you as soon as possible.</p>
+          
+          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <h3 style="margin-top: 0;">Your Message Summary:</h3>
+            <p style="margin: 5px 0;"><strong>Subject:</strong> ${subject}</p>
+            <p style="margin: 5px 0;"><strong>Message:</strong></p>
+            <div style="background-color: #ffffff; padding: 10px; border-left: 3px solid #ff4d4d; margin-top: 10px;">
+              <p style="white-space: pre-wrap; margin: 0;">${message}</p>
+            </div>
+          </div>
+
+          <div style="background-color: #fff9e6; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p style="margin: 5px 0;"><strong>📞 Contact Information:</strong></p>
+            <p style="margin: 5px 0;">Phone: +91 8122262701, +91 9840660101</p>
+            <p style="margin: 5px 0;">Email: muralicecream@gmail.com</p>
+            <p style="margin: 5px 0;">Address: No 67, railway station, near Nemilicheri, Thiruninravur, Chennai, Tamil Nadu 602024</p>
+          </div>
+
+          <p>We typically respond within 24 hours during business hours.</p>
+          <p>Best regards,<br><strong>Murali Icecream Team</strong></p>
+          
+          <div style="margin-top: 30px; text-align: center; font-size: 12px; color: #888;">
+            <p>If you have any urgent queries, please call us at +91 8122262701</p>
+            <p>&copy; ${new Date().getFullYear()} Murali Icecream. All rights reserved.</p>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Send email to Admin
+    const adminMailOptions = {
+      from: `Murali Icecream Website <${process.env.EMAIL_USER}>`,
+      to: 'muralicecream@gmail.com',
+      subject: `🔔 New Contact Form: ${subject} - ${name}`,
+      html: adminEmailHtml,
+      replyTo: email
+    };
+
+    // Send email to Customer
+    const customerMailOptions = {
+      from: `Murali Icecream <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Thank you for contacting Murali Icecream',
+      html: customerEmailHtml
+    };
+
+    console.log(`Sending confirmation email to customer: ${email}`);
+    try {
+      await transporter.sendMail(customerMailOptions);
+      console.log('Customer confirmation email sent successfully');
+    } catch (error) {
+      console.error('Error sending customer confirmation email:', error);
+    }
+
+    console.log(`Sending notification email to admin: muralicecream@gmail.com`);
+    try {
+      await transporter.sendMail(adminMailOptions);
+      console.log('Admin notification email sent successfully');
+    } catch (error) {
+      console.error('Error sending admin notification email:', error);
+    }
+
+    console.log('Contact form email processing completed');
+    res.json({ success: true, message: 'Your message has been sent successfully! We will get back to you soon.' });
+
+  } catch (error) {
+    console.error('Error processing contact form:', error);
+    res.status(500).json({ success: false, message: 'Failed to send message. Please try again later.', error: error.message });
   }
 });
 
