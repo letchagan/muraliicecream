@@ -128,9 +128,30 @@ app.post('/api/payment/create-order', async (req, res) => {
       amount: Math.round(amount * 100), // Convert to paise
       currency,
       receipt: receipt || `order_${Date.now()}`,
-      notes: {
-        orderData: JSON.stringify(orderData),
-      }
+      notes: (() => {
+        const customer = orderData?.customerInfo || {};
+        const items = orderData?.cartItems || [];
+
+        // Build a simple product summary: "2x Mango Icecream, 1x Vanilla Kulfi"
+        const productSummary = items
+          .map(item => `${item.quantity}x ${item.name}`)
+          .join(', ') || 'N/A';
+
+        const customerName = `${customer.firstName || ''} ${customer.lastName || ''}`.trim() || 'N/A';
+        const address = [
+          customer.address,
+          customer.city,
+          customer.state,
+          customer.pincode
+        ].filter(Boolean).join(', ') || 'N/A';
+
+        return {
+          customer_name: customerName,
+          products: productSummary,
+          delivery_address: address,
+          phone: customer.phone || 'N/A',
+        };
+      })()
     };
 
     const order = await razorpay.orders.create(options);
