@@ -143,17 +143,8 @@ app.use((req, res, next) => {
 // Middleware
 app.use(bodyParser.json({ limit: '10kb' })); // SECURITY: Limit body size
 
-// Serve static files from the React app build directory
-app.use(express.static(path.join(__dirname, 'dist')));
-
-// Serve robots.txt and sitemap.xml
-app.get('/robots.txt', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'robots.txt'));
-});
-
-app.get('/sitemap.xml', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'sitemap.xml'));
-});
+// Note: Frontend is hosted on Hostinger — Render is API-only.
+// No static file serving needed here.
 
 // ============================================================
 // SECURITY: Admin Authentication — JWT-based
@@ -561,11 +552,7 @@ app.post('/api/send-order-email', orderLimiter, async (req, res) => {
   }
 });
 
-// The "catchall" handler: for any request that doesn't
-// match one above, send back React's index.html file.
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist/index.html'));
-});
+// Frontend is served by Hostinger — no catchall route needed.
 
 // Start the server
 app.listen(PORT, '0.0.0.0', () => {
