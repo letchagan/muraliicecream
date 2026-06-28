@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-import { createTransport } from 'nodemailer';
+import { Resend } from 'resend';
 
 // ============================================================
 // SECURITY: Helmet middleware — security headers
@@ -88,14 +88,13 @@ const sanitizeObject = (obj) => {
   return sanitized;
 };
 
-// Email Transporter
-const transporter = createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
+// Resend — HTTP email API (reliable from cloud hosts, unlike SMTP)
+// Free tier: 100 emails/day. Sign up at https://resend.com
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
+
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
 
 // Initialize Razorpay (server-side only — live key never exposed to frontend)
 const razorpay = new Razorpay({
@@ -413,25 +412,30 @@ app.post('/api/send-contact-email', contactLimiter, async (req, res) => {
       </div>
     `;
 
-    const adminMailOptions = {
-      from: `Murali Icecream Website <${process.env.EMAIL_USER}>`,
+    if (!resend) {
+      console.warn('Resend not configured — email not sent');
+      return res.json({ success: true, message: 'Message received (email skipped — no API key)' });
+    }
+
+    const customerMsg = {
+      from: `Murali Icecream <${FROM_EMAIL}>`,
+      to: email,
+      subject: 'Thank you for contacting Murali Icecream',
+      html: customerEmailHtml,
+    };
+
+    const adminMsg = {
+      from: `Murali Icecream Website <${FROM_EMAIL}>`,
       to: 'muralicecream@gmail.com',
       subject: `New Contact Form: ${subject} - ${name}`,
       html: adminEmailHtml,
-      replyTo: email
-    };
-
-    const customerMailOptions = {
-      from: `Murali Icecream <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Thank you for contacting Murali Icecream',
-      html: customerEmailHtml
+      replyTo: email,
     };
 
     // Send both emails in parallel
     const contactResults = await Promise.allSettled([
-      transporter.sendMail(customerMailOptions),
-      transporter.sendMail(adminMailOptions),
+      resend.emails.send(customerMsg),
+      resend.emails.send(adminMsg),
     ]);
 
     if (contactResults[0].status === 'rejected') {
@@ -512,15 +516,20 @@ app.post('/api/send-order-email', orderLimiter, async (req, res) => {
       </div>
     `;
 
-    const customerMailOptions = {
-      from: `Murali Icecream <${process.env.EMAIL_USER}>`,
+    if (!resend) {
+      console.warn('Resend not configured — order email skipped');
+      return res.json({ success: true, message: 'Order placed (email skipped — no API key)' });
+    }
+
+    const customerMsg = {
+      from: `Murali Icecream <${FROM_EMAIL}>`,
       to: email,
       subject: `Order Confirmation - ${orderId}`,
-      html: emailHtml
+      html: emailHtml,
     };
 
-    const adminMailOptions = {
-      from: `Murali Icecream System <${process.env.EMAIL_USER}>`,
+    const adminMsg = {
+      from: `Murali Icecream System <${FROM_EMAIL}>`,
       to: 'muralicecream@gmail.com',
       subject: `New Order Alert: ${orderId} - ₹${Number(totalAmount).toFixed(2)}`,
       html: `
@@ -528,13 +537,13 @@ app.post('/api/send-order-email', orderLimiter, async (req, res) => {
           <strong>ADMIN NOTIFICATION: New Order Received</strong>
         </div>
         ${emailHtml}
-      `
+      `,
     };
 
-    // Send both emails in parallel — much faster than sequential
+    // Send both emails in parallel
     const results = await Promise.allSettled([
-      transporter.sendMail(customerMailOptions),
-      transporter.sendMail(adminMailOptions),
+      resend.emails.send(customerMsg),
+      resend.emails.send(adminMsg),
     ]);
 
     if (results[0].status === 'rejected') {
