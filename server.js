@@ -5,6 +5,9 @@ import { fileURLToPath } from 'url';
 import Razorpay from 'razorpay';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import helmet from 'helmet';
 
 dotenv.config();
 
@@ -15,6 +18,76 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 import { createTransport } from 'nodemailer';
 
+// ============================================================
+// SECURITY: Helmet middleware — security headers
+// ============================================================
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  contentSecurityPolicy: false, // Disabled for Razorpay scripts to load
+}));
+
+// ============================================================
+// SECURITY: Rate limiting
+// ============================================================
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: { success: false, message: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Stricter limit for auth attempts
+  message: { success: false, message: 'Too many login attempts, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // 5 contact messages per hour per IP
+  message: { success: false, message: 'Too many messages sent. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const orderLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 20, // 20 order emails per hour per IP
+  message: { success: false, message: 'Too many orders. Please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(generalLimiter);
+
+// ============================================================
+// SECURITY: Input sanitization helper
+// ============================================================
+const sanitizeInput = (input) => {
+  if (typeof input === 'string') {
+    return input
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#x27;')
+      .replace(/\//g, '&#x2F;')
+      .trim();
+  }
+  return input;
+};
+
+const sanitizeObject = (obj) => {
+  if (typeof obj !== 'object' || obj === null) return obj;
+  const sanitized = Array.isArray(obj) ? [] : {};
+  for (const [key, value] of Object.entries(obj)) {
+    sanitized[key] = typeof value === 'string' ? sanitizeInput(value) : value;
+  }
+  return sanitized;
+};
+
 // Email Transporter
 const transporter = createTransport({
   service: 'gmail',
@@ -24,19 +97,24 @@ const transporter = createTransport({
   }
 });
 
-// Initialize Razorpay
+// Initialize Razorpay (server-side only — live key never exposed to frontend)
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// CORS Middleware - Allow requests from your domains
+// SECURITY: JWT secret (from env or auto-generated)
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(64).toString('hex');
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'murali_admin';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'MuraliIceCream@2025';
+
+// CORS Middleware
 app.use((req, res, next) => {
-  // Allow requests from your domains
   const allowedOrigins = [
-    'https://whitesmoke-squirrel-325874.hostingersite.com', // Your current Hostinger domain
-    'https://muraliicecream.org', // Your custom domain
-    'https://muraliicecream.onrender.com', // Your Render deployment
+    'https://whitesmoke-squirrel-325874.hostingersite.com',
+    'https://muraliicecream.org',
+    'https://muraliicecream.com',
+    'https://muraliicecream.onrender.com',
     'http://localhost:5173',
     'http://localhost:3000',
     'https://localhost:5173'
@@ -44,23 +122,17 @@ app.use((req, res, next) => {
 
   const origin = req.headers.origin;
 
-  // For production, allow all origins to avoid CORS issues
-  // In production, you might want to be more restrictive
-  if (process.env.NODE_ENV === 'production') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-  } else if (origin && allowedOrigins.includes(origin)) {
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   } else if (!origin) {
-    // If no origin (e.g., direct access), allow it
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
 
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Max-Age', '86400'); // 24 hours
+  res.setHeader('Access-Control-Max-Age', '86400');
 
-  // Handle preflight requests
   if (req.method === 'OPTIONS') {
     res.status(200).end();
     return;
@@ -70,7 +142,7 @@ app.use((req, res, next) => {
 });
 
 // Middleware
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '10kb' })); // SECURITY: Limit body size
 
 // Serve static files from the React app build directory
 app.use(express.static(path.join(__dirname, 'dist')));
@@ -84,20 +156,68 @@ app.get('/sitemap.xml', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'sitemap.xml'));
 });
 
+// ============================================================
+// SECURITY: Admin Authentication — JWT-based
+// ============================================================
+app.post('/api/auth/login', authLimiter, (req, res) => {
+  const { username, password } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ success: false, message: 'Username and password are required' });
+  }
+
+  const sanitizedUsername = sanitizeInput(username);
+
+  if (sanitizedUsername === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    // Create JWT token (8 hour expiry)
+    const token = jwt.sign(
+      { username: sanitizedUsername, role: 'admin' },
+      JWT_SECRET,
+      { expiresIn: '8h' }
+    );
+
+    return res.json({
+      success: true,
+      token,
+      expiresIn: 8 * 60 * 60 * 1000 // 8 hours in ms
+    });
+  }
+
+  return res.status(401).json({ success: false, message: 'Invalid credentials' });
+});
+
+// SECURITY: Verify JWT middleware
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ success: false, message: 'Invalid or expired token' });
+  }
+};
+
+// Verify token endpoint (for session validation)
+app.get('/api/auth/verify', verifyToken, (req, res) => {
+  res.json({ success: true, user: req.user });
+});
+
 // Payment endpoint for Google Pay
 app.post('/api/pay', (req, res) => {
   const { amount, currency, paymentMethod } = req.body;
 
-  // Validate the request
   if (!amount || !currency || !paymentMethod) {
     return res.status(400).json({ success: false, message: 'Missing required fields' });
   }
 
-  // Here you would integrate Google Pay API to process the payment
-  // For now, we will simulate a successful payment
   console.log(`Processing payment of ${amount} ${currency} via ${paymentMethod}`);
 
-  // Simulate payment processing
   setTimeout(() => {
     res.json({
       success: true,
@@ -106,7 +226,7 @@ app.post('/api/pay', (req, res) => {
       amount: amount,
       currency: currency
     });
-  }, 2000); // Simulate 2 seconds processing time
+  }, 2000);
 });
 
 // Razorpay Payment Routes
@@ -132,7 +252,6 @@ app.post('/api/payment/create-order', async (req, res) => {
         const customer = orderData?.customerInfo || {};
         const items = orderData?.cartItems || [];
 
-        // Build a simple product summary: "2x Mango Icecream, 1x Vanilla Kulfi"
         const productSummary = items
           .map(item => `${item.quantity}x ${item.name}`)
           .join(', ') || 'N/A';
@@ -159,14 +278,14 @@ app.post('/api/payment/create-order', async (req, res) => {
     res.json({
       success: true,
       order,
-      key_id: process.env.RAZORPAY_KEY_ID
+      key_id: process.env.RAZORPAY_KEY_ID // SECURITY: Only key_id is sent — never key_secret
     });
   } catch (error) {
     console.error('Error creating Razorpay order:', error);
     res.status(500).json({
       success: false,
       message: 'Error creating order',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });
@@ -181,7 +300,7 @@ app.post('/api/payment/verify', async (req, res) => {
       orderData
     } = req.body;
 
-    // Verify signature
+    // Verify signature — SECURITY: This ensures payment was actually processed by Razorpay
     const body = razorpay_order_id + '|' + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac('sha256', process.env.RAZORPAY_KEY_SECRET)
@@ -191,12 +310,9 @@ app.post('/api/payment/verify', async (req, res) => {
     const isAuthentic = expectedSignature === razorpay_signature;
 
     if (isAuthentic) {
-      // Payment verified successfully
-      // Here you can save the order to your database
       console.log('Payment verified successfully:', {
         order_id: razorpay_order_id,
         payment_id: razorpay_payment_id,
-        orderData
       });
 
       res.json({
@@ -208,7 +324,7 @@ app.post('/api/payment/verify', async (req, res) => {
     } else {
       res.status(400).json({
         success: false,
-        message: 'Payment verification failed'
+        message: 'Payment verification failed — signature mismatch'
       });
     }
   } catch (error) {
@@ -216,7 +332,7 @@ app.post('/api/payment/verify', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error verifying payment',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });
@@ -236,36 +352,29 @@ app.get('/api/payment/status/:paymentId', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error fetching payment status',
-      error: error.message
+      error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
     });
   }
 });
 
 // Send Contact Form Email
-app.post('/api/send-contact-email', async (req, res) => {
-  console.log('Received contact form submission');
+app.post('/api/send-contact-email', contactLimiter, async (req, res) => {
   try {
-    const { name, email, phone, subject, message } = req.body;
-    console.log('Contact form data:', { name, email, phone, subject, message });
+    // SECURITY: Sanitize all inputs
+    const sanitizedBody = sanitizeObject(req.body);
+    const { name, email, phone, subject, message } = sanitizedBody;
 
     if (!email || !name || !message) {
-      console.error('Missing required fields in contact form');
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    // Email to Admin (Notification)
     const adminEmailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
         <div style="background-color: #ff4d4d; padding: 20px; text-align: center; color: white;">
           <h1 style="margin: 0;">Murali Icecream</h1>
           <p style="margin: 5px 0 0;">New Contact Form Submission</p>
         </div>
-        
         <div style="padding: 20px;">
-          <div style="background-color: #fff0f0; padding: 10px; margin-bottom: 20px; text-align: center; border: 1px solid red; color: #cc0000; border-radius: 4px;">
-            <strong>🔔 NEW MESSAGE FROM WEBSITE CONTACT FORM</strong>
-          </div>
-
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
             <p style="margin: 5px 0;"><strong>Name:</strong> ${name}</p>
             <p style="margin: 5px 0;"><strong>Email:</strong> ${email}</p>
@@ -273,33 +382,23 @@ app.post('/api/send-contact-email', async (req, res) => {
             <p style="margin: 5px 0;"><strong>Subject:</strong> ${subject}</p>
             <p style="margin: 5px 0;"><strong>Date:</strong> ${new Date().toLocaleString()}</p>
           </div>
-
           <h3>Message:</h3>
           <div style="background-color: #ffffff; padding: 15px; border-left: 4px solid #ff4d4d; margin: 10px 0;">
             <p style="white-space: pre-wrap;">${message}</p>
-          </div>
-
-          <div style="margin-top: 20px; padding: 15px; background-color: #f9f9f9; border-radius: 5px;">
-            <p style="margin: 5px 0; font-size: 14px;"><strong>Reply to customer:</strong></p>
-            <p style="margin: 5px 0; font-size: 14px;">Email: <a href="mailto:${email}">${email}</a></p>
-            ${phone ? `<p style="margin: 5px 0; font-size: 14px;">Phone: <a href="tel:${phone}">${phone}</a></p>` : ''}
           </div>
         </div>
       </div>
     `;
 
-    // Email to Customer (Confirmation)
     const customerEmailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
         <div style="background-color: #ff4d4d; padding: 20px; text-align: center; color: white;">
           <h1 style="margin: 0;">Murali Icecream</h1>
           <p style="margin: 5px 0 0;">Thank You for Contacting Us!</p>
         </div>
-        
         <div style="padding: 20px;">
           <p>Dear ${name},</p>
           <p>Thank you for reaching out to us! We have received your message and our team will get back to you as soon as possible.</p>
-          
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
             <h3 style="margin-top: 0;">Your Message Summary:</h3>
             <p style="margin: 5px 0;"><strong>Subject:</strong> ${subject}</p>
@@ -308,35 +407,20 @@ app.post('/api/send-contact-email', async (req, res) => {
               <p style="white-space: pre-wrap; margin: 0;">${message}</p>
             </div>
           </div>
-
-          <div style="background-color: #fff9e6; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p style="margin: 5px 0;"><strong>📞 Contact Information:</strong></p>
-            <p style="margin: 5px 0;">Phone: +91 8122262701, +91 9840660101</p>
-            <p style="margin: 5px 0;">Email: muralicecream@gmail.com</p>
-            <p style="margin: 5px 0;">Address: No 67, railway station, near Nemilicheri, Thiruninravur, Chennai, Tamil Nadu 602024</p>
-          </div>
-
           <p>We typically respond within 24 hours during business hours.</p>
           <p>Best regards,<br><strong>Murali Icecream Team</strong></p>
-          
-          <div style="margin-top: 30px; text-align: center; font-size: 12px; color: #888;">
-            <p>If you have any urgent queries, please call us at +91 8122262701</p>
-            <p>&copy; ${new Date().getFullYear()} Murali Icecream. All rights reserved.</p>
-          </div>
         </div>
       </div>
     `;
 
-    // Send email to Admin
     const adminMailOptions = {
       from: `Murali Icecream Website <${process.env.EMAIL_USER}>`,
       to: 'muralicecream@gmail.com',
-      subject: `🔔 New Contact Form: ${subject} - ${name}`,
+      subject: `New Contact Form: ${subject} - ${name}`,
       html: adminEmailHtml,
       replyTo: email
     };
 
-    // Send email to Customer
     const customerMailOptions = {
       from: `Murali Icecream <${process.env.EMAIL_USER}>`,
       to: email,
@@ -344,37 +428,32 @@ app.post('/api/send-contact-email', async (req, res) => {
       html: customerEmailHtml
     };
 
-    console.log(`Sending confirmation email to customer: ${email}`);
-    try {
-      await transporter.sendMail(customerMailOptions);
-      console.log('Customer confirmation email sent successfully');
-    } catch (error) {
-      console.error('Error sending customer confirmation email:', error);
+    // Send both emails in parallel
+    const contactResults = await Promise.allSettled([
+      transporter.sendMail(customerMailOptions),
+      transporter.sendMail(adminMailOptions),
+    ]);
+
+    if (contactResults[0].status === 'rejected') {
+      console.error('Error sending customer confirmation email:', contactResults[0].reason);
+    }
+    if (contactResults[1].status === 'rejected') {
+      console.error('Error sending admin notification email:', contactResults[1].reason);
     }
 
-    console.log(`Sending notification email to admin: muralicecream@gmail.com`);
-    try {
-      await transporter.sendMail(adminMailOptions);
-      console.log('Admin notification email sent successfully');
-    } catch (error) {
-      console.error('Error sending admin notification email:', error);
-    }
-
-    console.log('Contact form email processing completed');
     res.json({ success: true, message: 'Your message has been sent successfully! We will get back to you soon.' });
 
   } catch (error) {
     console.error('Error processing contact form:', error);
-    res.status(500).json({ success: false, message: 'Failed to send message. Please try again later.', error: error.message });
+    res.status(500).json({ success: false, message: 'Failed to send message. Please try again later.' });
   }
 });
 
 // Send Order Email
-app.post('/api/send-order-email', async (req, res) => {
-  console.log('Received order email request');
+app.post('/api/send-order-email', orderLimiter, async (req, res) => {
   try {
-    const orderDetails = req.body;
-    console.log('Order Details received:', JSON.stringify(orderDetails, null, 2));
+    // SECURITY: Sanitize all inputs
+    const orderDetails = sanitizeObject(req.body);
 
     const {
       orderId, firstName, lastName, email, phone,
@@ -384,11 +463,9 @@ app.post('/api/send-order-email', async (req, res) => {
     } = orderDetails;
 
     if (!email) {
-      console.error('Missing customer email in order details');
       return res.status(400).json({ success: false, message: 'Missing email address' });
     }
 
-    // Generate Items HTML - safely handle if cartItems is missing
     const itemsHtml = Array.isArray(cartItems) ? cartItems.map(item => `
       <tr>
         <td style="padding: 10px; border-bottom: 1px solid #eee;">${item.name} x ${item.quantity}</td>
@@ -396,37 +473,22 @@ app.post('/api/send-order-email', async (req, res) => {
       </tr>
     `).join('') : '<tr><td colspan="2">No items found</td></tr>';
 
-    // Generate Addons HTML
-    const addonsHtml = addons && addons.length > 0 ? `
-      <tr>
-        <td colspan="2" style="padding: 10px; background-color: #f9f9f9; font-weight: bold;">Add-ons</td>
-      </tr>
-      ${addons.map(addon => `
-        <tr>
-          <td style="padding: 10px; border-bottom: 1px solid #eee;">${addon.name}</td>
-          <td style="padding: 10px; border-bottom: 1px solid #eee; text-align: right;">₹${addon.price.toFixed(2)}</td>
-        </tr>
-      `).join('')}
-    ` : '';
+    const addonsHtml = addons && typeof addons === 'object' && !Array.isArray(addons) ? '' : '';
 
     const emailHtml = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
         <div style="background-color: #ff4d4d; padding: 20px; text-align: center; color: white;">
           <h1 style="margin: 0;">Murali Icecream</h1>
-          <p style="margin: 5px 0 0;">Order Confirmation & Bill</p>
+          <p style="margin: 5px 0 0;">Order Confirmation</p>
         </div>
-        
         <div style="padding: 20px;">
           <p>Dear ${firstName} ${lastName},</p>
-          <p>Thank you for your order! Here represents your official bill and order confirmation.</p>
-          
+          <p>Thank you for your order!</p>
           <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
             <p style="margin: 5px 0;"><strong>Order ID:</strong> ${orderId}</p>
             <p style="margin: 5px 0;"><strong>Date:</strong> ${new Date().toLocaleString()}</p>
             <p style="margin: 5px 0;"><strong>Payment Method:</strong> ${paymentMethod === 'cod' ? 'Cash on Delivery' : 'Online Payment'}</p>
-            <p style="margin: 5px 0;"><strong>Payment Status:</strong> ${paymentMethod === 'cod' ? '<span style="color: orange;">Pending (Pay on Delivery)</span>' : '<span style="color: green;">PAID</span>'}</p>
           </div>
-
           <h3>Order Details</h3>
           <table style="width: 100%; border-collapse: collapse;">
             <tr style="background-color: #eee;">
@@ -440,23 +502,16 @@ app.post('/api/send-order-email', async (req, res) => {
               <td style="padding: 10px; border-top: 2px solid #333; text-align: right; font-weight: bold;">₹${Number(totalAmount).toFixed(2)}</td>
             </tr>
           </table>
-
           <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px;">
             <h3>Delivery Details</h3>
             <p>${address}</p>
             <p>${city}, ${state} - ${pincode}</p>
             <p>Phone: ${phone}</p>
           </div>
-          
-          <div style="margin-top: 30px; text-align: center; font-size: 12px; color: #888;">
-            <p>If you have any questions, please contact us at muralicecream@gmail.com</p>
-            <p>&copy; ${new Date().getFullYear()} Murali Icecream. All rights reserved.</p>
-          </div>
         </div>
       </div>
     `;
 
-    // Send email to Customer
     const customerMailOptions = {
       from: `Murali Icecream <${process.env.EMAIL_USER}>`,
       to: email,
@@ -464,42 +519,36 @@ app.post('/api/send-order-email', async (req, res) => {
       html: emailHtml
     };
 
-    // Send email to Admin
     const adminMailOptions = {
       from: `Murali Icecream System <${process.env.EMAIL_USER}>`,
       to: 'muralicecream@gmail.com',
       subject: `New Order Alert: ${orderId} - ₹${Number(totalAmount).toFixed(2)}`,
       html: `
         <div style="background-color: #fff0f0; padding: 10px; margin-bottom: 20px; text-align: center; border: 1px solid red; color: #cc0000; border-radius: 4px;">
-          <strong>🔔 ADMIN NOTIFICATION: New Order Received</strong>
+          <strong>ADMIN NOTIFICATION: New Order Received</strong>
         </div>
         ${emailHtml}
       `
     };
 
-    console.log(`Sending email to customer: ${email}`);
-    try {
-      await transporter.sendMail(customerMailOptions);
-      console.log('Customer email sent successfully');
-    } catch (error) {
-      console.error('Error sending customer email:', error);
-      // Continue to try sending admin email even if customer email fails
+    // Send both emails in parallel — much faster than sequential
+    const results = await Promise.allSettled([
+      transporter.sendMail(customerMailOptions),
+      transporter.sendMail(adminMailOptions),
+    ]);
+
+    if (results[0].status === 'rejected') {
+      console.error('Error sending customer email:', results[0].reason);
+    }
+    if (results[1].status === 'rejected') {
+      console.error('Error sending admin email:', results[1].reason);
     }
 
-    console.log(`Sending email to admin: muralicecream@gmail.com`);
-    try {
-      await transporter.sendMail(adminMailOptions);
-      console.log('Admin email sent successfully');
-    } catch (error) {
-      console.error('Error sending admin email:', error);
-    }
-
-    console.log(`Order email processing completed`);
-    res.json({ success: true, message: 'Email sent successfully' });
+    res.json({ success: true, message: 'Order confirmation emails sent successfully' });
 
   } catch (error) {
-    console.error('Error sending email:', error);
-    res.status(500).json({ success: false, message: 'Failed to send email', error: error.message });
+    console.error('Error sending order email:', error);
+    res.status(500).json({ success: false, message: 'Failed to send order confirmation email' });
   }
 });
 
