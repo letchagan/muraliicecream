@@ -40,12 +40,12 @@
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.285.0",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^6.9.0",
     "razorpay": "^2.9.6",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-helmet-async": "^2.0.4",
     "react-router-dom": "^6.16.0",
+    "resend": "^6.16.0",
     "tailwind-merge": "^1.14.0",
     "tailwindcss-animate": "^1.0.7"
   },
